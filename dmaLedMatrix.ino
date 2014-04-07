@@ -2,9 +2,9 @@
 #define LED_COLS 32
 #define LED_ROWS 16
 #define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 10
+#define BIT_DEPTH 8
 
-#define ANIMATION_COUNTS 2
+#define ANIMATION_COUNTS 1
 
 // Output assignments
 #define LED_R0   15    // Port C, output 0
@@ -36,13 +36,14 @@ struct pixel {
   uint16_t B;
 };
 
-#define DMA_BUFFER_SIZE LED_COLS*LED_ROWS/ROWS_PER_OUTPUT*2
+// Size of the unrolled bitstream that describes each page
+#define LED_BITPAGE_SIZE LED_COLS*LED_ROWS/ROWS_PER_OUTPUT*2
 
 // Display buffer
 pixel Pixels[LED_COLS * LED_ROWS];
 
 // 2x DMA buffer
-uint8_t DmaBuffer[2][BIT_DEPTH][DMA_BUFFER_SIZE];
+uint8_t DmaBuffer[2][BIT_DEPTH][LED_BITPAGE_SIZE];
 
 // Munge the data so it can be written out by the DMA engine
 void pixelsToDmaBuffer(struct pixel* pixelInput, uint8_t bufferOutput[][512]) {
@@ -70,37 +71,36 @@ void pixelsToDmaBuffer(struct pixel* pixelInput, uint8_t bufferOutput[][512]) {
   }
 }
 
-void makeFadeCircle(struct pixel* pixelInput, int x, int y) {
+void makeFadeCircle(struct pixel* pixelInput, float x, float y) {
+  int rVal;
+  int gVal;
+  int bVal;
+      
   // Draw a frame and set to go.
   for(int row = 0; row < LED_ROWS; row++) {
     for(int col = 0; col < LED_COLS; col++) {
-      int rVal = 0;
-      int gVal = 0;
-      int bVal = 0;
+      int val = min(abs(row - y) * abs(col - x) * 1, (1 << BIT_DEPTH) - 1);
       
       if(row > y && col > x) {
-        rVal = abs(row - y) * abs(col - x);
-        gVal = abs(row - y) * abs(col - x);
+        rVal = val;
+        gVal = val;
+        bVal = 0;
       }
       else if(row > y && col <x) {
-        gVal = abs(row - y) * abs(col - x);
-        bVal = abs(row - y) * abs(col - x);
+        rVal = 0;
+        gVal = val;
+        bVal = val;
       }
       else if(row < y && col >x) {
-        bVal = abs(row - y) * abs(col - x);
-        rVal = abs(row - y) * abs(col - x);
+        rVal = val;
+        gVal = 0;
+        bVal = val;
       }
       else {
-        rVal = abs(row - y) * abs(col - x);
-        gVal = abs(row - y) * abs(col - x);
-        bVal = abs(row - y) * abs(col - x);
+        rVal = val;
+        gVal = val;
+        bVal = val;
       }
-
-//      #define BRIGHTNESS_MAX (1 << (BIT_DEPTH - 1))
-//      #define VAL_MAX ((LED_ROWS - 1)*(LED_COLS - 1))
-//      pixelInput[row*LED_COLS + col].R = (int)(rVal*BRIGHTNESS_MAX/VAL_MAX + .5);
-//      pixelInput[row*LED_COLS + col].G = (int)(gVal*BRIGHTNESS_MAX/VAL_MAX + .5);
-//      pixelInput[row*LED_COLS + col].B = (int)(bVal*BRIGHTNESS_MAX/VAL_MAX + .5);
 
       pixelInput[row*LED_COLS + col].R = rVal;
       pixelInput[row*LED_COLS + col].G = gVal;
@@ -126,29 +126,43 @@ void setup() {
   pinMode(LED_STB, OUTPUT);
   pinMode(LED_OE, OUTPUT);
   
+  // Enable DMA clock
+  SIM_SCGC7 |= SIM_SCGC7_DMA;
+
+  // Use default configuration
+  DMA_CR = 0;
+//  DMA_ERQ = 0;
+  
   
   makeFadeCircle(Pixels, 16, 8);
   pixelsToDmaBuffer(Pixels, DmaBuffer[0]);
+}
 
-//  // DMA channel #1 responsable for shifting out the data/clock stream
-//  DMA_TCD1_SADDR = DmaBuffer[0];
-//  DMA_TCD1_SOFF = 0;
-//  DMA_TCD1_ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);
-//  DMA_TCD1_NBYTES_MLNO = 1;
-//  DMA_TCD1_SLAST = 0;
-//  DMA_TCD1_DADDR = &GPIOC_PSOR;
-//  DMA_TCD1_DOFF = 0;
-//  DMA_TCD1_CITER_ELINKNO = DMA_BUFFER_SIZE;
-//  DMA_TCD1_DLASTSGA = 0;
-//  DMA_TCD1_CSR = DMA_TCD_CSR_DREQ;
-//  DMA_TCD1_BITER_ELINKNO = DMA_BUFFER_SIZE;
+void writeTCD(int currentFrame, int depth) {
+  // DMA channel #1 responsable for shifting out the data/clock stream
+  DMA_TCD1_SADDR = DmaBuffer[currentFrame][depth];                // Address to read from
+  DMA_TCD1_SOFF = 1;                                              // Bytes to increment source register between writes 
+  DMA_TCD1_ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);  // 8-bit input and output
+  DMA_TCD1_NBYTES_MLNO = LED_BITPAGE_SIZE;                         // Number of bytes to transfer in the minor loop
+  DMA_TCD1_SLAST = 0;                                             // Bytes to add after a major iteration count (N/A)
+  DMA_TCD1_DADDR = &GPIOC_PDOR;                                   // Address to write to
+  DMA_TCD1_DOFF = 0;                                              // Bytes to increment destination register between write
+  DMA_TCD1_CITER_ELINKNO = 1;                                     // Number of major loops to complete
+  DMA_TCD1_BITER_ELINKNO = 1;                                     // Reset value for CITER (must be equal to CITER)
+  DMA_TCD1_DLASTSGA = 0;                                          // Address of next TCD (N/A)
+  
+  DMA_TCD1_CSR |= DMA_TCD_CSR_START;                              // Start the transfer
+  while (!(DMA_TCD1_CSR & DMA_TCD_CSR_DONE));                     // Wait for the transfer to complete
 }
 
 
-int animationX = 0;
-int animationY = 0;
+float animationX = 0;
+float animationY = 0;
 int counts = 0;
 int frame = 0;
+
+float xSpeed = .14;
+float ySpeed = .18;
 
 void loop() {
   // Now, start cycling through the rows
@@ -161,13 +175,16 @@ void loop() {
     
     for(int depth = 0; depth < BIT_DEPTH; depth++) {
       
-      // draw the current column
-      for(int col = 0; col < LED_COLS; col++) {
-        
-        GPIOC_PDOR = DmaBuffer[frame][depth][(row*LED_COLS + col)*2    ];
-        GPIOC_PDOR = DmaBuffer[frame][depth][(row*LED_COLS + col)*2 + 1];
-      }
-      
+//      // draw the current column
+//      for(int col = 0; col < LED_COLS; col++) {
+//        
+//        GPIOC_PDOR = DmaBuffer[frame][depth][(row*LED_COLS + col)*2    ];
+//        GPIOC_PDOR = DmaBuffer[frame][depth][(row*LED_COLS + col)*2 + 1];
+//      }
+
+      writeTCD(frame, depth);
+
+            
       digitalWrite(LED_STB, HIGH);
       digitalWrite(LED_STB, LOW);
   
@@ -181,8 +198,15 @@ void loop() {
   counts++;
   if(counts > ANIMATION_COUNTS) {
     counts = 0;
-    animationX = (animationX + 1)%(LED_COLS*2);
-    animationY = (animationY + 1)%(LED_ROWS*2);
+    animationX = (animationX + xSpeed);
+    if(animationX > LED_COLS*2) {
+      animationX -= LED_COLS*2;
+    }
+
+    animationY = (animationY + ySpeed);
+    if(animationY > LED_ROWS*2) {
+      animationY -= LED_ROWS*2;
+    }
     
     makeFadeCircle(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     pixelsToDmaBuffer(Pixels, DmaBuffer[frame]);
