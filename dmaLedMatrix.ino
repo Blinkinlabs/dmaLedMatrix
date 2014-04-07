@@ -2,7 +2,7 @@
 #define LED_COLS 32
 #define LED_ROWS 16
 #define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 9
+#define BIT_DEPTH 8
 
 #define ANIMATION_COUNTS 1
 
@@ -13,10 +13,6 @@
 #define LED_R1    9    // Port C, output 3
 #define LED_G1   10    // Port C, output 4
 #define LED_B1   13    // Port C, output 5
-//#define LED_A     0
-//#define LED_B     1
-//#define LED_C     2
-//#define LED_D     3
 #define LED_A     16   // Port B, output 0
 #define LED_B     17   // Port B, output 1
 #define LED_C     19   // Port B, output 2
@@ -216,32 +212,19 @@ void loop() {
 
 //  uint8_t* dataPointer = DmaBuffer[frame];
   setupTCD1(DmaBuffer[frame], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-
-
   setupTCD2(Addresses, 1, LED_ROWS/ROWS_PER_OUTPUT);
 
   // Now, start cycling through the rows
   for(int row = 0; row < (LED_ROWS/ROWS_PER_OUTPUT); row++) {
-
-//    // Set up the address outputs (todo: Delay this?)
-//    digitalWrite(LED_A, (row >> 0) & 0x01);
-//    digitalWrite(LED_B, (row >> 1) & 0x01);
-//    digitalWrite(LED_C, (row >> 2) & 0x01);
     
     DMA_TCD2_CSR |= DMA_TCD_CSR_START;                              // Start the transfer
-    while ((DMA_TCD2_CSR & DMA_TCD_CSR_ACTIVE));                     // Wait for the minor loop to complete
+    while ((DMA_TCD2_CSR & DMA_TCD_CSR_ACTIVE));                    // Wait for the minor loop to complete
   
     // For this row, write out all the bit depths
     for(int depth = 0; depth < BIT_DEPTH; depth++) {
-      
-//      // Write out this bit depth worth of data
-//      for(int step = 0; step < ROW_BIT_SIZE; step++) {
-//        GPIOC_PDOR = *dataPointer;
-//        dataPointer++;
-//      }
 
-      DMA_TCD1_CSR |= DMA_TCD_CSR_START;                              // Start the transfer
-      while ((DMA_TCD1_CSR & DMA_TCD_CSR_ACTIVE));                     // Wait for the minor loop to complete
+      DMA_TCD1_CSR |= DMA_TCD_CSR_START;                            // Start the transfer
+      while ((DMA_TCD1_CSR & DMA_TCD_CSR_ACTIVE));                  // Wait for the minor loop to complete
   
       digitalWrite(LED_OE, LOW);
       delayMicroseconds(1 * (1 << depth));
