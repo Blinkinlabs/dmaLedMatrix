@@ -2,7 +2,7 @@
 #define LED_COLS 32
 #define LED_ROWS 16
 #define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 8
+#define BIT_DEPTH 9
 
 #define ANIMATION_COUNTS 1
 
@@ -138,12 +138,12 @@ void setup() {
   pixelsToDmaBuffer(Pixels, DmaBuffer[0]);
 }
 
-void writeTCD(int currentFrame, int depth) {
+void writeTCD(uint8_t* source, int size) {
   // DMA channel #1 responsable for shifting out the data/clock stream
-  DMA_TCD1_SADDR = DmaBuffer[currentFrame][depth];                // Address to read from
+  DMA_TCD1_SADDR = source;                                        // Address to read from
   DMA_TCD1_SOFF = 1;                                              // Bytes to increment source register between writes 
   DMA_TCD1_ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);  // 8-bit input and output
-  DMA_TCD1_NBYTES_MLNO = LED_BITPAGE_SIZE;                         // Number of bytes to transfer in the minor loop
+  DMA_TCD1_NBYTES_MLNO = size;                                    // Number of bytes to transfer in the minor loop
   DMA_TCD1_SLAST = 0;                                             // Bytes to add after a major iteration count (N/A)
   DMA_TCD1_DADDR = &GPIOC_PDOR;                                   // Address to write to
   DMA_TCD1_DOFF = 0;                                              // Bytes to increment destination register between write
@@ -182,9 +182,8 @@ void loop() {
 //        GPIOC_PDOR = DmaBuffer[frame][depth][(row*LED_COLS + col)*2 + 1];
 //      }
 
-      writeTCD(frame, depth);
+      writeTCD(&DmaBuffer[frame][depth][row*LED_COLS*2], LED_COLS*2);
 
-            
       digitalWrite(LED_STB, HIGH);
       digitalWrite(LED_STB, LOW);
   
