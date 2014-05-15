@@ -4,7 +4,7 @@
 #define LED_COLS 32
 #define LED_ROWS 16
 #define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 9
+#define BIT_DEPTH 12
 
 // Output assignments
 #define LED_R0   15    // Port C, output 0
@@ -13,27 +13,21 @@
 #define LED_R1    9    // Port C, output 3
 #define LED_G1   10    // Port C, output 4
 #define LED_B1   13    // Port C, output 5
-
-//#define LED_A     16   // Port B, output 0
-//#define LED_B     17   // Port B, output 1
-//#define LED_C     19   // Port B, output 2
-//#define LED_D     18   // Port B, output 3
-
 #define LED_A     2    // Port D, output 0
 #define LED_B    14    // Port D, output 1
 #define LED_C     7    // Port D, output 2
 #define LED_D     8    // Port D, output 3
-
 #define LED_CLK  11    // Port C, output 6
 
-#define LED_STB  12    // Port C, output 7
-//#define LED_STB   6    // Port D, output 4
+//#define LED_STB  12    // Port C, output 7
+#define LED_STB   6    // Port D, output 4
 
 #define LED_OE    3    // FTM1 channel 0
 
+
 #define MAJOR_INT_FLAG 16 // TODO: Delete me
 
-// Offsets in the port c register
+// Offsets in the port c register (data)
 #define DMA_R0_SHIFT   0
 #define DMA_G0_SHIFT   1
 #define DMA_B0_SHIFT   2
@@ -41,7 +35,11 @@
 #define DMA_G1_SHIFT   4
 #define DMA_B1_SHIFT   5
 #define DMA_CLK_SHIFT  6
-#define DMA_STB_SHIFT  7
+//#define DMA_STB_SHIFT  7
+
+// Offsets in the port D register (address)
+// Note: LED_A -> LED_D are contiguous, so we don't need to shif them.
+#define DMA_STB_SHIFT  4
 
 struct pixel {
   uint16_t R;
@@ -54,13 +52,15 @@ struct quadrantColorMultiplier {
   uint8_t G;
   uint8_t B;
   float brightness;
+  float brightnessSpeed;
 };
 
 // Display buffer (write into this!)
 pixel Pixels[LED_COLS * LED_ROWS];
 
 // Address output buffer
-uint8_t Addresses[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT];
+// Note that we have to clock 2 byes for every address, because we're also clocking the data out.
+uint8_t Addresses[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT*2];
 
 // Timer output buffers (these will be DMAd to the FTM1_MOD and FTM1_C0V registers)
 uint32_t FTM1_MODStates[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT];
@@ -72,7 +72,8 @@ uint32_t FTM1_C0VStates[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT];
 // For each of these rows, there are then BIT_DEPTH separate inner loops
 // And each inner loop has LED_COLS * 2 bytes states (the data is LED_COLS long, plus the clock signal is baked in)
 
-#define ROW_BIT_SIZE (LED_COLS*2 + 2)                              // Number of bytes required to store a single row of 1-bit color data output
+//#define ROW_BIT_SIZE (LED_COLS*2 + 2)                              // Number of bytes required to store a single row of 1-bit color data output
+#define ROW_BIT_SIZE (LED_COLS*2)                                  // Number of bytes required to store a single row of 1-bit color data output
 #define ROW_DEPTH_SIZE (ROW_BIT_SIZE*BIT_DEPTH)                    // Number of bytes required to store a single row of full-color data output
 #define PANEL_DEPTH_SIZE (ROW_DEPTH_SIZE*LED_ROWS/ROWS_PER_OUTPUT) // Number of bytes required to store an entire panel's worth of data output.
 
@@ -107,13 +108,13 @@ void pixelsToDmaBuffer(struct pixel* pixelInput, uint8_t bufferOutput[]) {
     }
   }
 
-  // Fill in the strobe data
-  for(int row = 0; row < LED_ROWS/ROWS_PER_OUTPUT; row++) {
-    for(int depth = 0; depth < BIT_DEPTH; depth++) {
-      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 0] = 1 << DMA_STB_SHIFT;
-      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 1] = 0 << DMA_STB_SHIFT;
-    } 
-  }
+//  // Fill in the strobe data
+//  for(int row = 0; row < LED_ROWS/ROWS_PER_OUTPUT; row++) {
+//    for(int depth = 0; depth < BIT_DEPTH; depth++) {
+//      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 0] = 1 << DMA_STB_SHIFT;
+//      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 1] = 0 << DMA_STB_SHIFT;
+//    } 
+//  }
 }
 
 void makeRed(struct pixel* pixelInput, float x, float y) {
@@ -128,7 +129,9 @@ void makeRed(struct pixel* pixelInput, float x, float y) {
       pixelInput[row*LED_COLS + col].G = 0x0000;
       pixelInput[row*LED_COLS + col].B = 0x0000;
 
-      pixelInput[row*LED_COLS + col].B = (row*LED_COLS + col);
+//      pixelInput[row*LED_COLS + col].R = (1 << (BIT_DEPTH-1));
+      pixelInput[row*LED_COLS + col].R = (row*LED_COLS + col);
+//      pixelInput[row*LED_COLS + col].R = 0xFFFF;
     }
   }
 }
@@ -171,7 +174,7 @@ void makeFadeCircle(struct pixel* pixelInput, float x, float y) {
   }
 }
 
-int quadSize = 12;
+int quadSize = 14;
 
 int quadCount = 9; // Note: fixed in the h. file, lazy here.
 int quadCountX = 3;
@@ -203,16 +206,18 @@ void makeScrollingBoxes(struct pixel* pixelInput, float x, float y) {
       float quadPosX = quadSize/2 - std::fabs(std::fmod(col-x,quadSize)-(quadSize/2));
       float quadPosY = quadSize/2 - std::fabs(std::fmod(row-y,quadSize)-(quadSize/2));
 
-      float val = quadPosX*quadPosY*8;
+      float val = quadPosX * quadPosY * 65;
+      
+      int maxValue = (1<<BIT_DEPTH) - 1;
 
-      pixelInput[row*LED_COLS + col].R = min(int(val*QuadColors[quad].R/255.0*std::fabs(QuadColors[quad].brightness-1)),255);
-      pixelInput[row*LED_COLS + col].G = min(int(val*QuadColors[quad].G/255.0*std::fabs(QuadColors[quad].brightness-1)),255);
-      pixelInput[row*LED_COLS + col].B = min(int(val*QuadColors[quad].B/255.0*std::fabs(QuadColors[quad].brightness-1)),255);
+      pixelInput[row*LED_COLS + col].R = min(int(val*QuadColors[quad].R/255.0*std::fabs(QuadColors[quad].brightness-1)),maxValue);
+      pixelInput[row*LED_COLS + col].G = min(int(val*QuadColors[quad].G/255.0*std::fabs(QuadColors[quad].brightness-1)),maxValue);
+      pixelInput[row*LED_COLS + col].B = min(int(val*QuadColors[quad].B/255.0*std::fabs(QuadColors[quad].brightness-1)),maxValue);
     }
   }
 
   for(int i = 0; i < quadCount; i++) {
-    QuadColors[i].brightness = std::fmod(QuadColors[i].brightness + .02, 2);
+    QuadColors[i].brightness = std::fmod(QuadColors[i].brightness +   QuadColors[i].brightnessSpeed, 2);
   }
 }
 
@@ -333,10 +338,10 @@ void setupTCD3(uint8_t* source, int minorLoopSize, int majorLoops) {
 // Set up the next display frame
 // TODO: flip pages, etc
 void dma_ch3_isr(void) {
-  DMA_CINT = 3;
+  DMA_CINT = DMA_CINT_CINT(3);
+  
   digitalWrite(MAJOR_INT_FLAG, HIGH);  // TODO: Delete me
   setupTCDs();
-
   digitalWrite(MAJOR_INT_FLAG, LOW);  // TODO: Delete me
 }
 
@@ -344,8 +349,12 @@ void setupTCDs() {
   //  setupTCD0(TimerStates,  8*4,          BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD0(FTM1_MODStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD1(FTM1_C0VStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD2(Addresses,    1,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+//  setupTCD2(Addresses,    1,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD2(Addresses,    2,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  
+  // TODO: Set up TCD4, and cause it to kick out the first data bit.
+  // DMA_SSRT = DMA_SSRT_SSRT(4)
 }
 
 
@@ -394,23 +403,46 @@ void setup() {
   // To make the DMA engine easier to program, we store a copy of the address table for each output page.
   for(int address = 0; address < LED_ROWS/ROWS_PER_OUTPUT; address++) {
     for(int page = 0; page < BIT_DEPTH; page++) {
-      Addresses[address*BIT_DEPTH + page] = address;
+      Addresses[(address*BIT_DEPTH + page)*2 + 0] = address | (1 << DMA_STB_SHIFT);
+      Addresses[(address*BIT_DEPTH + page)*2 + 1] = address;
     }
   }
 
   // Set D high on the last address, for use in debugging (TODO: Delete me!)
-  Addresses[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT-1] |= 0x08;
+  Addresses[(BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT - 1)*2 + 1] |= 0x08;
 
 
   // Fill the timer states table
   for(int address = 0; address < LED_ROWS/ROWS_PER_OUTPUT; address++) {
-    int onTime = 0x002F;      // Shortest OE on interval; the shorter, the dimmer the lowest bit. // 0x002F = 1.9uS, 
-    int blankingTime = 0xA4;  // Time that OE is disabled, when the timer update, data, and address updates are made
+    int onTime = 0x001;      // Shortest OE on interval; the shorter, the dimmer the lowest bit. // 0x002F = 1.9uS, 
+    
+    int blankingTime = 0x10;  // Time that OE is disabled, when the timer update, data, and address updates are made
 
-    for(int page = 0; page < BIT_DEPTH; page++) {      
+    int minCycleTime = 0x03F + 0x20;
+    int minLastCycleTime = 0x0120;  // Mininum number of cycles for the last cycle loop.
 
-      FTM1_C0VStates[address*BIT_DEPTH + page] = onTime;      
-      FTM1_MODStates[address*BIT_DEPTH + page] = onTime + blankingTime;
+    for(int page = 0; page < BIT_DEPTH; page++) {
+      if((address == LED_ROWS/ROWS_PER_OUTPUT -1)
+         && (page == BIT_DEPTH - 2)
+         && ((onTime + blankingTime) < minLastCycleTime)) {
+        // On the second-to-last cycle, we need enough time to flush the DMA engines and handle the
+        // interrupt to reset the DMA engines. If the combination of blanking time and
+        // on time don't meet this, increase the timer cycle count to an acceptable length.
+        FTM1_C0VStates[address*BIT_DEPTH + page] = onTime;
+        FTM1_MODStates[address*BIT_DEPTH + page] = minLastCycleTime;        
+      }      
+      else if((onTime + blankingTime) < minCycleTime) {
+        // The DMA engines need enough time to write out the data after every cycle.
+        // WHen the on time is really low, the combination of blanking time and
+        // on time might not create a long enough delay to meet this, so we need to increase
+        // the timer cycle count to meet this requirement.
+        FTM1_C0VStates[address*BIT_DEPTH + page] = onTime;
+        FTM1_MODStates[address*BIT_DEPTH + page] = minCycleTime;
+      }
+      else {
+        FTM1_C0VStates[address*BIT_DEPTH + page] = onTime;      
+        FTM1_MODStates[address*BIT_DEPTH + page] = onTime + blankingTime;
+      }
 
       onTime = onTime*2;
     }
@@ -421,14 +453,12 @@ void setup() {
   SIM_SCGC7 |= SIM_SCGC7_DMA;  // Enable DMA clock
   DMA_CR = 0;  // Use default configuration
 
-  // Enable interrupt on major completion for DMA channel 2 (address)
-  // (TODO: String data DMA after this, and skip the interrupt?)
-  DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;                           // Enable interrupt on major complete
-  NVIC_ENABLE_IRQ(IRQ_DMA_CH3);  // Enable interrupt request
-
   // Configure the DMA request input for DMA0
-  // TODO: USE DMA_SERQ instead?
-  DMA_ERQ |= DMA_ERQ_ERQ0;
+  DMA_SERQ = DMA_SERQ_SERQ(0);
+
+  // Enable interrupt on major completion for DMA channel 3 (data)
+  DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
+  NVIC_ENABLE_IRQ(IRQ_DMA_CH3);         // Enable interrupt request
 
   // DMAMUX
   // Configure the DMAMUX
@@ -453,46 +483,55 @@ void setup() {
   QuadColors[0].G = 64;
   QuadColors[0].B = 128;
   QuadColors[0].brightness = .6;
+  QuadColors[0].brightnessSpeed = .06;
 
   QuadColors[1].R = 32;
   QuadColors[1].G = 128;
   QuadColors[1].B = 64;
   QuadColors[1].brightness = .4;
+  QuadColors[1].brightnessSpeed = .02;
 
   QuadColors[2].R = 64;
   QuadColors[2].G = 32;
   QuadColors[2].B = 128;
   QuadColors[2].brightness = .7;
+  QuadColors[2].brightnessSpeed = .11;
 
   QuadColors[3].R = 64;
   QuadColors[3].G = 128;
   QuadColors[3].B = 32;
   QuadColors[3].brightness = .9;
+  QuadColors[3].brightnessSpeed = .09;
 
   QuadColors[4].R = 128;
   QuadColors[4].G = 32;
   QuadColors[4].B = 64;
   QuadColors[4].brightness = .3;
+  QuadColors[4].brightnessSpeed = .04;
 
   QuadColors[5].R = 128;
   QuadColors[5].G = 64;
   QuadColors[5].B = 32;
   QuadColors[5].brightness = .5;
+  QuadColors[5].brightnessSpeed = .13;
 
   QuadColors[6].R = 160;
   QuadColors[6].G = 32;
   QuadColors[6].B = 32;
   QuadColors[6].brightness = .1;
+  QuadColors[6].brightnessSpeed = .12;
 
   QuadColors[7].R = 32;
   QuadColors[7].G = 160;
   QuadColors[7].B = 32;
   QuadColors[7].brightness = .8;
+  QuadColors[7].brightnessSpeed = .10;
 
   QuadColors[8].R = 32;
   QuadColors[8].G = 32;
   QuadColors[8].B = 160;
   QuadColors[8].brightness = .2;
+  QuadColors[8].brightnessSpeed = .07;
   
   // Kick off our animation
   makeFadeCircle(Pixels, 16, 8);
@@ -505,26 +544,26 @@ float animationY = 0;
 int counts = 0;
 int frame = 0;
 
-float xSpeed = .21;
-float ySpeed = .24;
+float xSpeed = .16;
+float ySpeed = .13;
 
 void loop() {
 
   counts++;
-  if(counts > 2) {
+  if(counts > 0) {
     counts = 0;
-    animationX = (animationX + xSpeed);
-    //    if(animationX > LED_COLS*2) {
-    //      animationX -= LED_COLS*2;
-    //    }
+    animationX = (animationX - xSpeed);
+//    if(animationX > LED_COLS*2) {
+//      animationX -= LED_COLS*2;
+//    }
 
-    animationY = (animationY + ySpeed);
-    //    if(animationY > LED_ROWS*2) {
-    //      animationY -= LED_ROWS*2;
-    //    }
+    animationY = (animationY - ySpeed);
+//    if(animationY > LED_ROWS*2) {
+//      animationY -= LED_ROWS*2;
+//    }
 
-    makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
-    //makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    //makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     //makeFadeCircle(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     
     pixelsToDmaBuffer(Pixels, DmaBuffer[frame]);
