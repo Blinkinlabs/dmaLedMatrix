@@ -4,7 +4,7 @@
 #define LED_COLS 32
 #define LED_ROWS 16
 #define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 8
+#define BIT_DEPTH 9
 
 // Output assignments
 #define LED_R0   15    // Port C, output 0
@@ -13,15 +13,25 @@
 #define LED_R1    9    // Port C, output 3
 #define LED_G1   10    // Port C, output 4
 #define LED_B1   13    // Port C, output 5
-#define LED_A     16   // Port B, output 0
-#define LED_B     17   // Port B, output 1
-#define LED_C     19   // Port B, output 2
-#define LED_D     18   // Port B, output 3
+
+//#define LED_A     16   // Port B, output 0
+//#define LED_B     17   // Port B, output 1
+//#define LED_C     19   // Port B, output 2
+//#define LED_D     18   // Port B, output 3
+
+#define LED_A     2    // Port D, output 0
+#define LED_B    14    // Port D, output 1
+#define LED_C     7    // Port D, output 2
+#define LED_D     8    // Port D, output 3
+
 #define LED_CLK  11    // Port C, output 6
+
 #define LED_STB  12    // Port C, output 7
+//#define LED_STB   6    // Port D, output 4
+
 #define LED_OE    3    // FTM1 channel 0
 
-#define MAJOR_INT_FLAG 2 // TODO: Delete me
+#define MAJOR_INT_FLAG 16 // TODO: Delete me
 
 // Offsets in the port c register
 #define DMA_R0_SHIFT   0
@@ -106,8 +116,6 @@ void pixelsToDmaBuffer(struct pixel* pixelInput, uint8_t bufferOutput[]) {
   }
 }
 
-
-
 void makeRed(struct pixel* pixelInput, float x, float y) {
   int rVal;
   int gVal;
@@ -116,13 +124,11 @@ void makeRed(struct pixel* pixelInput, float x, float y) {
   // Draw a frame and set to go.
   for(int row = 0; row < LED_ROWS; row++) {
     for(int col = 0; col < LED_COLS; col++) {
-      pixelInput[row*LED_COLS + col].R = 0xFFFF; //(1 << (BIT_DEPTH-1));
-      pixelInput[row*LED_COLS + col].G = 0xFFFF;
-      pixelInput[row*LED_COLS + col].B = 0xFFFF;
+      pixelInput[row*LED_COLS + col].R = 0x0000; //(1 << (BIT_DEPTH-1));
+      pixelInput[row*LED_COLS + col].G = 0x0000;
+      pixelInput[row*LED_COLS + col].B = 0x0000;
 
-      //      pixelInput[row*LED_COLS + col].R = ((col&1)?0x5555:0);
-      //      pixelInput[row*LED_COLS + col].G = ((col&1)?0x5555:0);
-      //      pixelInput[row*LED_COLS + col].B = ((col&1)?0x5555:0);
+      pixelInput[row*LED_COLS + col].B = (row*LED_COLS + col);
     }
   }
 }
@@ -272,26 +278,30 @@ void setupTCD1(uint32_t* source, int minorLoopSize, int majorLoops) {
   DMA_TCD1_CITER_ELINKYES = majorLoops + 1;                           // Number of major loops to complete
   DMA_TCD1_BITER_ELINKYES = majorLoops + 1;                           // Reset value for CITER (must be equal to CITER)
 
-  // Trigger DMA2 (data) after each minor loop
+  // Trigger DMA2 (address) after each minor loop
   DMA_TCD1_BITER_ELINKYES |= DMA_TCD_CITER_ELINK;
   DMA_TCD1_BITER_ELINKYES |= (0x02 << 9);  
   DMA_TCD1_CITER_ELINKYES |= DMA_TCD_CITER_ELINK;
   DMA_TCD1_CITER_ELINKYES |= (0x02 << 9);
 }
 
-// TCD2 clocks and strobes the pixel data, which are on port C
+
+
+
+// TCD2 writes out the address select lines, which are on port D
 void setupTCD2(uint8_t* source, int minorLoopSize, int majorLoops) {
   DMA_TCD2_SADDR = source;                                        // Address to read from
   DMA_TCD2_SOFF = 1;                                              // Bytes to increment source register between writes 
   DMA_TCD2_ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);  // 8-bit input and output
   DMA_TCD2_NBYTES_MLNO = minorLoopSize;                           // Number of bytes to transfer in the minor loop
   DMA_TCD2_SLAST = 0;                                             // Bytes to add after a major iteration count (N/A)
-  DMA_TCD2_DADDR = &GPIOC_PDOR;                                   // Address to write to
+//  DMA_TCD2_DADDR = &GPIOB_PDOR;                                   // Address to write to
+  DMA_TCD2_DADDR = &GPIOD_PDOR;                                   // Address to write to
   DMA_TCD2_DOFF = 0;                                              // Bytes to increment destination register between write
-  //  DMA_TCD2_CITER_ELINKNO = majorLoops;                            // Number of major loops to complete
-  //  DMA_TCD2_BITER_ELINKNO = majorLoops;                            // Reset value for CITER (must be equal to CITER)
+  DMA_TCD2_CITER_ELINKYES = majorLoops;                           // Number of major loops to complete
+  DMA_TCD2_BITER_ELINKYES = majorLoops;                           // Reset value for CITER (must be equal to CITER)
   DMA_TCD2_DLASTSGA = 0;                                          // Address of next TCD (N/A)
-
+  
   // Workaround for DMA majorelink unreliability: increase the minor loop count by one
   // Note that the final transfer doesn't end up happening, because 
   DMA_TCD2_CITER_ELINKYES = majorLoops + 1;                           // Number of major loops to complete
@@ -304,22 +314,22 @@ void setupTCD2(uint8_t* source, int minorLoopSize, int majorLoops) {
   DMA_TCD2_CITER_ELINKYES |= (0x03 << 9);
 }
 
-
-// TCD3 writes out the address select lines, which are on port B
+// TCD3 clocks and strobes the pixel data, which are on port C
 void setupTCD3(uint8_t* source, int minorLoopSize, int majorLoops) {
   DMA_TCD3_SADDR = source;                                        // Address to read from
   DMA_TCD3_SOFF = 1;                                              // Bytes to increment source register between writes 
   DMA_TCD3_ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);  // 8-bit input and output
   DMA_TCD3_NBYTES_MLNO = minorLoopSize;                           // Number of bytes to transfer in the minor loop
   DMA_TCD3_SLAST = 0;                                             // Bytes to add after a major iteration count (N/A)
-  DMA_TCD3_DADDR = &GPIOB_PDOR;                                   // Address to write to
+  DMA_TCD3_DADDR = &GPIOC_PDOR;                                   // Address to write to
   DMA_TCD3_DOFF = 0;                                              // Bytes to increment destination register between write
-  DMA_TCD3_CITER_ELINKYES = majorLoops;                           // Number of major loops to complete
-  DMA_TCD3_BITER_ELINKYES = majorLoops;                           // Reset value for CITER (must be equal to CITER)
+  DMA_TCD3_CITER_ELINKNO = majorLoops;                            // Number of major loops to complete
+  DMA_TCD3_BITER_ELINKNO = majorLoops;                            // Reset value for CITER (must be equal to CITER)
   DMA_TCD3_DLASTSGA = 0;                                          // Address of next TCD (N/A)
 }
 
-// When the last address write has completed, that means we're at the end of the display refresh cycle
+
+// When the data address write has completed, that means we're at the end of the display refresh cycle
 // Set up the next display frame
 // TODO: flip pages, etc
 void dma_ch3_isr(void) {
@@ -334,8 +344,8 @@ void setupTCDs() {
   //  setupTCD0(TimerStates,  8*4,          BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD0(FTM1_MODStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD1(FTM1_C0VStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD2(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD3(Addresses,    1,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD2(Addresses,    1,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
 }
 
 
@@ -394,7 +404,7 @@ void setup() {
 
   // Fill the timer states table
   for(int address = 0; address < LED_ROWS/ROWS_PER_OUTPUT; address++) {
-    int onTime = 0x004F;
+    int onTime = 0x002F;      // Shortest OE on interval; the shorter, the dimmer the lowest bit. // 0x002F = 1.9uS, 
     int blankingTime = 0xA4;  // Time that OE is disabled, when the timer update, data, and address updates are made
 
     for(int page = 0; page < BIT_DEPTH; page++) {      
@@ -403,20 +413,6 @@ void setup() {
       FTM1_MODStates[address*BIT_DEPTH + page] = onTime + blankingTime;
 
       onTime = onTime*2;
-
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 0] =                  // FTM1_SC
-      //              FTM_SC_CLKS(1) | FTM_SC_PS(1);  //Clock setup
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 1] = 0;               // FTM1_CNT
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 2] = onTime + 0x58;   // FTM1_MOD
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 3] =                  // FTM1_C0SC
-      //              0x40                    // Enable interrupt
-      //            | 0x20                    // Mode select: Edge-aligned PWM 
-      //            | 0x04                    // Low-true pulses (inverted)
-      //            | 0x01;                   // Enable DMA out
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 4] = onTime;          // FTM1_C0V
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 5] = 0;               // FTM1_C1SC
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 6] = 0;               // FTM1_C1V      
-      //      TimerStates[(address*BIT_DEPTH + page)*TIMER_STATES_SIZE + 7] = 0;               // N/A??
     }
   }
 
@@ -430,12 +426,9 @@ void setup() {
   DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;                           // Enable interrupt on major complete
   NVIC_ENABLE_IRQ(IRQ_DMA_CH3);  // Enable interrupt request
 
-  // Configure the DMA request input for DMA0, DMA1, DMA2
+  // Configure the DMA request input for DMA0
   // TODO: USE DMA_SERQ instead?
-
-  DMA_ERQ |= DMA_ERQ_ERQ0; 
-  //  DMA_ERQ |= DMA_ERQ_ERQ1;
-  //  DMA_ERQ |= DMA_ERQ_ERQ2;
+  DMA_ERQ |= DMA_ERQ_ERQ0;
 
   // DMAMUX
   // Configure the DMAMUX
@@ -446,20 +439,6 @@ void setup() {
   DMAMUX0_CHCFG0 = DMAMUX_DISABLE;
   DMAMUX0_CHCFG0 = DMAMUX_SOURCE_FTM1_CH0 | DMAMUX_ENABLE;
 
-  // Data DMA channel:
-  // Configure DMAMUX to trigger DMA1 from FTM1_CH0
-  //  DMAMUX0_CHCFG1 = DMAMUX_DISABLE;
-  //  DMAMUX0_CHCFG1 = DMAMUX_SOURCE_FTM1_CH0 | DMAMUX_ENABLE;
-
-  // Address DMA channel:
-  // Configure DMAMUX to trigger DMA2 from FTM1_CH0
-  //  DMAMUX0_CHCFG2 = DMAMUX_DISABLE;
-  //  DMAMUX0_CHCFG2 = DMAMUX_SOURCE_FTM1_CH0 | DMAMUX_ENABLE;
-
-  // Kick off our animation
-  makeFadeCircle(Pixels, 16, 8);
-  pixelsToDmaBuffer(Pixels, DmaBuffer[0]);
-
   // Load this frame of data into the DMA engine
   setupTCDs();
 
@@ -467,6 +446,7 @@ void setup() {
   SIM_SCGC6 |= SIM_SCGC6_FTM1;  // Enable FTM0 clock
   setupFTM1();
 
+  // Animation setup
 
   //Fill in the quad colors table
   QuadColors[0].R = 32;
@@ -513,6 +493,10 @@ void setup() {
   QuadColors[8].G = 32;
   QuadColors[8].B = 160;
   QuadColors[8].brightness = .2;
+  
+  // Kick off our animation
+  makeFadeCircle(Pixels, 16, 8);
+  pixelsToDmaBuffer(Pixels, DmaBuffer[0]);
 }
 
 
@@ -539,8 +523,8 @@ void loop() {
     //      animationY -= LED_ROWS*2;
     //    }
 
-    //makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
-    makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    //makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     //makeFadeCircle(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     
     pixelsToDmaBuffer(Pixels, DmaBuffer[frame]);
