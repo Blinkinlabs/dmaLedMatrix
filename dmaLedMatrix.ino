@@ -56,8 +56,10 @@ struct quadrantColorMultiplier {
 pixel Pixels[LED_COLS * LED_ROWS];
 
 // Address output buffer
-// Note that we have to clock 2 byes for every address, because we're also clocking the data out.
-uint8_t Addresses[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT*2];
+// Note: Increasing the count BYTE_WRITES_PER_ADDRESS will increase the time delay between
+// LED_OE deassertion and LED_STB strobe.
+#define BYTE_WRITES_PER_ADDRESSS 2
+uint8_t Addresses[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT*BYTE_WRITES_PER_ADDRESSS];
 
 // Timer output buffers (these will be DMAd to the FTM1_MOD and FTM1_C0V registers)
 uint32_t FTM1_MODStates[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT];
@@ -115,7 +117,7 @@ void makeRed(struct pixel* pixelInput, float x, float y) {
   // Draw a frame and set to go.
   for(int row = 0; row < LED_ROWS; row++) {
     for(int col = 0; col < LED_COLS; col++) {
-      pixelInput[row*LED_COLS + col].R = 0x0100;
+      pixelInput[row*LED_COLS + col].R = 0x0000;
       pixelInput[row*LED_COLS + col].G = 0x0000;
       pixelInput[row*LED_COLS + col].B = 0x0000;
 
@@ -127,7 +129,8 @@ void makeRed(struct pixel* pixelInput, float x, float y) {
   
   int row = 0;
   int col = 0;
-  pixelInput[row*LED_COLS + col].R = 0x0FFF;
+  pixelInput[row*LED_COLS + col].R = 0x0001;
+  pixelInput[row*LED_COLS + 1].R = 0x0FFF;
 }
 
 void makeFadeCircle(struct pixel* pixelInput, float x, float y) {
@@ -340,11 +343,10 @@ void dma_ch2_isr(void) {
 }
 
 void setupTCDs() {
-  setupTCD0(FTM1_MODStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD1(FTM1_C0VStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD2(Addresses,    2,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-//  setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT + 1);
+  setupTCD0(FTM1_MODStates, 4,                        BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD1(FTM1_C0VStates, 4,                        BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD2(Addresses,      BYTE_WRITES_PER_ADDRESSS, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
+  setupTCD3(DmaBuffer[0],   ROW_BIT_SIZE,             BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
 
   DMA_SSRT = DMA_SSRT_SSRT(3);
 }
@@ -395,24 +397,40 @@ void setup() {
   // To make the DMA engine easier to program, we store a copy of the address table for each output page.
   for(int address = 0; address < LED_ROWS/ROWS_PER_OUTPUT; address++) {
     for(int page = 0; page < BIT_DEPTH; page++) {
-      Addresses[(address*BIT_DEPTH + page)*2 + 0] = address | (1 << DMA_STB_SHIFT);
-      Addresses[(address*BIT_DEPTH + page)*2 + 1] = address;
+      int last_address;
+      if(page == 0) {
+        last_address = (address + LED_ROWS/ROWS_PER_OUTPUT - 1)%(LED_ROWS/ROWS_PER_OUTPUT);
+      }
+      else {
+        last_address = address;
+      }
+      
+      for(int i = 0; i < BYTE_WRITES_PER_ADDRESSS; i++) {
+        // Note: We're actually pumping out the last address here, to avoid changing it too soon after
+        // deasserting enable.
+        Addresses[(address*BIT_DEPTH + page)*BYTE_WRITES_PER_ADDRESSS + i] = last_address;
+      }
+      
+      // TODO: Inserted to cause extra delay between OE and address change.
+      Addresses[(address*BIT_DEPTH + page)*BYTE_WRITES_PER_ADDRESSS + BYTE_WRITES_PER_ADDRESSS - 2] = address | (1 << DMA_STB_SHIFT);
+      Addresses[(address*BIT_DEPTH + page)*BYTE_WRITES_PER_ADDRESSS + BYTE_WRITES_PER_ADDRESSS - 1] = address;
     }
   }
 
   // Set D high on the last address, for use in debugging (TODO: Delete me!)
-  Addresses[(BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT - 1)*2 + 1] |= 0x08;
+  Addresses[(BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT - 1)*BYTE_WRITES_PER_ADDRESSS + 1] |= 0x08;
 
 
   // Fill the timer states table
   for(int address = 0; address < LED_ROWS/ROWS_PER_OUTPUT; address++) {
     int onTime = 0x001;      // Shortest OE on interval; the shorter, the dimmer the lowest bit. // 0x002F = 1.9uS, 
     
+// TODO: Reduce me?
     int blankingTime = 0x10;  // Time that OE is disabled, when the timer update, data, and address updates are made
+//    int blankingTime = 0xB00;  // Time that OE is disabled, when the timer update, data, and address updates are made
 
     int minCycleTime = 0x03F + 0x20;
     int minLastCycleTime = 0x0120;  // Mininum number of cycles for the last cycle loop.
-//    int minLastCycleTime = 0x0220;  // Mininum number of cycles for the last cycle loop.
 
     for(int page = 0; page < BIT_DEPTH; page++) {
       if((address == LED_ROWS/ROWS_PER_OUTPUT -1)
@@ -448,10 +466,6 @@ void setup() {
 
   // Configure the DMA request input for DMA0
   DMA_SERQ = DMA_SERQ_SERQ(0);
-
-  // Enable interrupt on major completion for DMA channel 3 (data)
-//  DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
-//  NVIC_ENABLE_IRQ(IRQ_DMA_CH3);         // Enable interrupt request
 
   // Enable interrupt on major completion for DMA channel 2 (address)
   DMA_TCD2_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
