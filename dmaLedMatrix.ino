@@ -1,10 +1,10 @@
 #include <cmath>
 
 //Display Geometry
-#define LED_COLS 32
-#define LED_ROWS 16
-#define ROWS_PER_OUTPUT 2
-#define BIT_DEPTH 12
+#define LED_COLS 32        // Number of columns that the LED matrix has
+#define LED_ROWS 16        // Number of rows that the LED matrix has
+#define ROWS_PER_OUTPUT 2  // Output rows per scan (must be 2)
+#define BIT_DEPTH 12       // Color bits per channel
 
 // Output assignments
 #define LED_R0   15    // Port C, output 0
@@ -18,14 +18,12 @@
 #define LED_C     7    // Port D, output 2
 #define LED_D     8    // Port D, output 3
 #define LED_CLK  11    // Port C, output 6
-
-//#define LED_STB  12    // Port C, output 7
 #define LED_STB   6    // Port D, output 4
-
 #define LED_OE    3    // FTM1 channel 0
 
 
 #define MAJOR_INT_FLAG 16 // TODO: Delete me
+
 
 // Offsets in the port c register (data)
 #define DMA_R0_SHIFT   0
@@ -35,10 +33,9 @@
 #define DMA_G1_SHIFT   4
 #define DMA_B1_SHIFT   5
 #define DMA_CLK_SHIFT  6
-//#define DMA_STB_SHIFT  7
 
 // Offsets in the port D register (address)
-// Note: LED_A -> LED_D are contiguous, so we don't need to shif them.
+// Note: LED_A -> LED_D are contiguous, so we don't need to shift them.
 #define DMA_STB_SHIFT  4
 
 struct pixel {
@@ -71,13 +68,13 @@ uint32_t FTM1_C0VStates[BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT];
 // to be set before they are activated.
 // For each of these rows, there are then BIT_DEPTH separate inner loops
 // And each inner loop has LED_COLS * 2 bytes states (the data is LED_COLS long, plus the clock signal is baked in)
-
-//#define ROW_BIT_SIZE (LED_COLS*2 + 2)                              // Number of bytes required to store a single row of 1-bit color data output
 #define ROW_BIT_SIZE (LED_COLS*2)                                  // Number of bytes required to store a single row of 1-bit color data output
 #define ROW_DEPTH_SIZE (ROW_BIT_SIZE*BIT_DEPTH)                    // Number of bytes required to store a single row of full-color data output
 #define PANEL_DEPTH_SIZE (ROW_DEPTH_SIZE*LED_ROWS/ROWS_PER_OUTPUT) // Number of bytes required to store an entire panel's worth of data output.
 
 // 2x DMA buffer
+// Note: Extra ROW_BIT_SIZE at end to account for extra DMA transfer
+// TODO: Trigger int from last address and skip the extra data transfer?
 uint8_t DmaBuffer[2][PANEL_DEPTH_SIZE];
 
 // Munge the data so it can be written out by the DMA engine
@@ -95,26 +92,19 @@ void pixelsToDmaBuffer(struct pixel* pixelInput, uint8_t bufferOutput[]) {
       int data_B1 = pixelInput[(row + LED_ROWS/ROWS_PER_OUTPUT)*LED_COLS + col].B;
 
       for(int depth = 0; depth < BIT_DEPTH; depth++) {
-        uint8_t output = (((data_R0 >> depth) & 0x01) << DMA_R0_SHIFT)
+        uint8_t output =
+            (((data_R0 >> depth) & 0x01) << DMA_R0_SHIFT)
           | (((data_G0 >> depth) & 0x01) << DMA_G0_SHIFT)
-            | (((data_B0 >> depth) & 0x01) << DMA_B0_SHIFT)
-              | (((data_R1 >> depth) & 0x01) << DMA_R1_SHIFT)
-                | (((data_G1 >> depth) & 0x01) << DMA_G1_SHIFT)
-                  | (((data_B1 >> depth) & 0x01) << DMA_B1_SHIFT);
+          | (((data_B0 >> depth) & 0x01) << DMA_B0_SHIFT)
+          | (((data_R1 >> depth) & 0x01) << DMA_R1_SHIFT)
+          | (((data_G1 >> depth) & 0x01) << DMA_G1_SHIFT)
+          | (((data_B1 >> depth) & 0x01) << DMA_B1_SHIFT);
 
         bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + col*2 + 0] = output;
         bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + col*2 + 1] = output | 1 << DMA_CLK_SHIFT;
       }
     }
   }
-
-//  // Fill in the strobe data
-//  for(int row = 0; row < LED_ROWS/ROWS_PER_OUTPUT; row++) {
-//    for(int depth = 0; depth < BIT_DEPTH; depth++) {
-//      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 0] = 1 << DMA_STB_SHIFT;
-//      bufferOutput[row*ROW_DEPTH_SIZE + depth*ROW_BIT_SIZE + LED_COLS*2 + 1] = 0 << DMA_STB_SHIFT;
-//    } 
-//  }
 }
 
 void makeRed(struct pixel* pixelInput, float x, float y) {
@@ -125,15 +115,19 @@ void makeRed(struct pixel* pixelInput, float x, float y) {
   // Draw a frame and set to go.
   for(int row = 0; row < LED_ROWS; row++) {
     for(int col = 0; col < LED_COLS; col++) {
-      pixelInput[row*LED_COLS + col].R = 0x0000; //(1 << (BIT_DEPTH-1));
+      pixelInput[row*LED_COLS + col].R = 0x0100;
       pixelInput[row*LED_COLS + col].G = 0x0000;
       pixelInput[row*LED_COLS + col].B = 0x0000;
 
-//      pixelInput[row*LED_COLS + col].R = (1 << (BIT_DEPTH-1));
-      pixelInput[row*LED_COLS + col].R = (row*LED_COLS + col);
+//      pixelInput[row*LED_COLS + col].R = col;        
+//      pixelInput[row*LED_COLS + col].R = (row*LED_COLS + col);
 //      pixelInput[row*LED_COLS + col].R = 0xFFFF;
     }
   }
+  
+  int row = 0;
+  int col = 0;
+  pixelInput[row*LED_COLS + col].R = 0x0FFF;
 }
 
 void makeFadeCircle(struct pixel* pixelInput, float x, float y) {
@@ -224,10 +218,10 @@ void makeScrollingBoxes(struct pixel* pixelInput, float x, float y) {
 void makeSparkles(struct pixel* pixelInput, float x, float y) {
   for(int row = 0; row < LED_ROWS; row++) {
     for(int col = 0; col < LED_COLS; col++) {
-      if(random(2)) {
-        pixelInput[row*LED_COLS + col].R = 65535;
-        pixelInput[row*LED_COLS + col].G = 65535;
-        pixelInput[row*LED_COLS + col].B = 65535;
+      if(random(200)<2) {
+        pixelInput[row*LED_COLS + col].R = 0;//(1 << BIT_DEPTH - 1) -1;
+        pixelInput[row*LED_COLS + col].G = (1 << BIT_DEPTH - 1) -1;
+        pixelInput[row*LED_COLS + col].B = (1 << BIT_DEPTH - 1) -1;
       }
       else {
         pixelInput[row*LED_COLS + col].R = 0;
@@ -309,8 +303,8 @@ void setupTCD2(uint8_t* source, int minorLoopSize, int majorLoops) {
   
   // Workaround for DMA majorelink unreliability: increase the minor loop count by one
   // Note that the final transfer doesn't end up happening, because 
-  DMA_TCD2_CITER_ELINKYES = majorLoops + 1;                           // Number of major loops to complete
-  DMA_TCD2_BITER_ELINKYES = majorLoops + 1;                           // Reset value for CITER (must be equal to CITER)
+  DMA_TCD2_CITER_ELINKYES = majorLoops;                           // Number of major loops to complete
+  DMA_TCD2_BITER_ELINKYES = majorLoops;                           // Reset value for CITER (must be equal to CITER)
 
   // Trigger DMA3 (address) after each minor loop
   DMA_TCD2_BITER_ELINKYES |= DMA_TCD_CITER_ELINK;
@@ -334,11 +328,11 @@ void setupTCD3(uint8_t* source, int minorLoopSize, int majorLoops) {
 }
 
 
-// When the data address write has completed, that means we're at the end of the display refresh cycle
+// When the last address write has completed, that means we're at the end of the display refresh cycle
 // Set up the next display frame
 // TODO: flip pages, etc
-void dma_ch3_isr(void) {
-  DMA_CINT = DMA_CINT_CINT(3);
+void dma_ch2_isr(void) {
+  DMA_CINT = DMA_CINT_CINT(2);
   
   digitalWrite(MAJOR_INT_FLAG, HIGH);  // TODO: Delete me
   setupTCDs();
@@ -346,15 +340,13 @@ void dma_ch3_isr(void) {
 }
 
 void setupTCDs() {
-  //  setupTCD0(TimerStates,  8*4,          BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD0(FTM1_MODStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD1(FTM1_C0VStates,  4,         BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-//  setupTCD2(Addresses,    1,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD2(Addresses,    2,            BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
   setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT);
-  
-  // TODO: Set up TCD4, and cause it to kick out the first data bit.
-  // DMA_SSRT = DMA_SSRT_SSRT(4)
+//  setupTCD3(DmaBuffer[0], ROW_BIT_SIZE, BIT_DEPTH*LED_ROWS/ROWS_PER_OUTPUT + 1);
+
+  DMA_SSRT = DMA_SSRT_SSRT(3);
 }
 
 
@@ -420,6 +412,7 @@ void setup() {
 
     int minCycleTime = 0x03F + 0x20;
     int minLastCycleTime = 0x0120;  // Mininum number of cycles for the last cycle loop.
+//    int minLastCycleTime = 0x0220;  // Mininum number of cycles for the last cycle loop.
 
     for(int page = 0; page < BIT_DEPTH; page++) {
       if((address == LED_ROWS/ROWS_PER_OUTPUT -1)
@@ -457,8 +450,12 @@ void setup() {
   DMA_SERQ = DMA_SERQ_SERQ(0);
 
   // Enable interrupt on major completion for DMA channel 3 (data)
-  DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
-  NVIC_ENABLE_IRQ(IRQ_DMA_CH3);         // Enable interrupt request
+//  DMA_TCD3_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
+//  NVIC_ENABLE_IRQ(IRQ_DMA_CH3);         // Enable interrupt request
+
+  // Enable interrupt on major completion for DMA channel 2 (address)
+  DMA_TCD2_CSR = DMA_TCD_CSR_INTMAJOR;  // Enable interrupt on major complete
+  NVIC_ENABLE_IRQ(IRQ_DMA_CH2);         // Enable interrupt request
 
   // DMAMUX
   // Configure the DMAMUX
@@ -562,9 +559,10 @@ void loop() {
 //      animationY -= LED_ROWS*2;
 //    }
 
-    //makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
-    makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    makeRed(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    //makeScrollingBoxes(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     //makeFadeCircle(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
+    //makeSparkles(Pixels, abs(LED_COLS - animationX), abs(LED_ROWS - animationY));
     
     pixelsToDmaBuffer(Pixels, DmaBuffer[frame]);
   }
